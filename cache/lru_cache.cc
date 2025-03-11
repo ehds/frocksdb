@@ -75,7 +75,6 @@ void LRUHandleTable::Resize() {
   }
   LRUHandle** new_list = new LRUHandle*[new_length];
   memset(new_list, 0, sizeof(new_list[0]) * new_length);
-  uint32_t count = 0;
   for (uint32_t i = 0; i < length_; i++) {
     LRUHandle* h = list_[i];
     while (h != nullptr) {
@@ -85,10 +84,8 @@ void LRUHandleTable::Resize() {
       h->next_hash = *ptr;
       *ptr = h;
       h = next;
-      count++;
     }
   }
-  assert(elems_ == count);
   delete[] list_;
   list_ = new_list;
   length_ = new_length;

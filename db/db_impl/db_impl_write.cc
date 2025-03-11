@@ -7,12 +7,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
+#include <memory>
 
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
+#include "logging/logging.h"
 #include "monitoring/perf_context_imp.h"
 #include "options/options_helper.h"
+#include "rocksdb/env.h"
+#include "rocksdb/status.h"
+#include "rocksdb/write_batch_base.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 
@@ -61,6 +66,39 @@ Status DBImpl::WriteWithCallback(const WriteOptions& write_options,
 }
 #endif  // ROCKSDB_LITE
 
+ class LogHandler: public WriteBatch::Handler{
+    private:
+    Logger* logger_;
+
+    public:
+    LogHandler(Logger* logger):logger_(logger){};
+    void Put(const Slice & key, const Slice &) override{
+        ROCKS_LOG_INFO(logger_, "Put %s hex: %s", key.ToString().c_str(), key.ToString(1).c_str());
+    }
+     void Delete(const Slice & key) override{
+        ROCKS_LOG_INFO(logger_, "Delete %s hex: %s", key.ToString().c_str(), key.ToString(1).c_str());
+    }
+     Status PutCF(uint32_t column_family_id, const Slice& key,
+                         const Slice&)  override{
+        ROCKS_LOG_INFO(logger_, "Put %d %s hex: %s", column_family_id, key.ToString().c_str(), key.ToString(1).c_str());
+        return Status::OK();
+    }
+    
+     Status DeleteCF(uint32_t column_family_id, const Slice & key) override {
+        ROCKS_LOG_INFO(logger_, "DeleteCF %d %s hex: %s", column_family_id,key.ToString().c_str(), key.ToString(1).c_str());
+        return Status::OK();
+    }
+
+     Status MergeCF(uint32_t column_family_id, const Slice& key,
+                           const Slice&)  override{
+        ROCKS_LOG_INFO(logger_, "MergeCF %d %s hex: %s",column_family_id, key.ToString().c_str(), key.ToString(1).c_str());
+        return Status::OK();
+    }
+     void Merge(const Slice& key, const Slice& /*value*/) override {
+       ROCKS_LOG_INFO(logger_, "Merge %s hex: %s", key.ToString().c_str(), key.ToString(1).c_str());
+     }
+};
+
 // The main write queue. This is the only write queue that updates LastSequence.
 // When using one write queue, the same sequence also indicates the last
 // published sequence.
@@ -74,6 +112,9 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   if (my_batch == nullptr) {
     return Status::Corruption("Batch is nullptr!");
   }
+  std::unique_ptr<WriteBatch::Handler> logHandler(new LogHandler(immutable_db_options_.info_log.get()));
+  my_batch->GetWriteBatch()->Iterate(logHandler.get());
+
   if (tracer_) {
     InstrumentedMutexLock lock(&trace_mutex_);
     if (tracer_) {

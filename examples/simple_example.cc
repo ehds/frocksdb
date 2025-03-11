@@ -3,12 +3,22 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#include <cstdio>
-#include <string>
 
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "db/version_edit.h"
+#include "db/version_set.h"
+#include "db/write_controller.h"
+#include "file/filename.h"
+#include "monitoring/instrumented_mutex.h"
 #include "rocksdb/db.h"
+#include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/options.h"
+#include "rocksdb/status.h"
+#include "rocksdb/utilities/checkpoint.h"
 
 using namespace ROCKSDB_NAMESPACE;
 
@@ -16,72 +26,90 @@ using namespace ROCKSDB_NAMESPACE;
 std::string kDBPath = "C:\\Windows\\TEMP\\rocksdb_simple_example";
 #else
 std::string kDBPath = "/tmp/rocksdb_simple_example";
+std::string kDBPath2 = "/tmp/rocksdb_simple_example2";
+
 #endif
 
 int main() {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-  options.IncreaseParallelism();
-  options.OptimizeLevelStyleCompaction();
+
   // create the DB if it's not already present
   options.create_if_missing = true;
+  options.info_log_level = INFO_LEVEL;
 
+//   options.db_paths.emplace_back("dummy", 0);
+//   options.num_levels = 64;
+//    options.db_paths.emplace_back(kDBPath,0);
+//     // CurrentFileName();
+//     std::shared_ptr<Cache> tc(NewLRUCache(options.max_open_files - 10,
+//                                         options.table_cache_numshardbits));
+//   WriteController wc(options.delayed_write_rate);
+//   WriteBufferManager wb(options.db_write_buffer_size);
+//   ImmutableDBOptions immutable_db_options(options);
+//   EnvOptions envOptions;
+//    std::vector<std::string> cf_names;
+
+//   Status st = DB::ListColumnFamilies(options, kDBPath, &cf_names);
+
+//   std::vector<ColumnFamilyDescriptor> column_families;
+//  for(auto cf_name:cf_names){
+//     column_families.emplace_back(cf_name, options);
+//  }  
+
+//  VersionSet versions(kDBPath, &immutable_db_options, envOptions, tc.get(), &wb, &wc,
+//                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr);
+//  Status s =versions.Recover(column_families);
+//  std::cout<<s.ToString()<<std::endl;
+//     VersionEdit edit;
+//    edit.SetNextFile(versions.current_next_file_number());
+//   ColumnFamilyData* default_cfd = versions.GetColumnFamilySet()->GetDefault();
+//   assert(default_cfd);
+//   InstrumentedMutex mutex;
+
+//   mutex.Lock();
+//   s = versions.LogAndApply(
+//       default_cfd, *default_cfd->GetLatestMutableCFOptions(), &edit, &mutex,
+//         default_cfd->GetDataDir(0), /*new_descriptor_log*/ true);
+
+                      
   // open DB
-  Status s = DB::Open(options, kDBPath, &db);
-  assert(s.ok());
+  auto s = DB::Open(options, kDBPath, &db);
+// //   Status s2 = DB::Open(options, kDBPath2, &db);
 
-  // Put key-value
-  s = db->Put(WriteOptions(), "key1", "value");
-  assert(s.ok());
-  std::string value;
-  // get value
-  s = db->Get(ReadOptions(), "key1", &value);
-  assert(s.ok());
-  assert(value == "value");
+    
+// std::cout<<s.ToString()<<std::endl;
+// std::string keys= "key1";
+//   s = db->Put(WriteOptions(), keys, "value");
 
-  // atomically apply a set of updates
-  {
-    WriteBatch batch;
-    batch.Delete("key1");
-    batch.Put("key2", value);
-    s = db->Write(WriteOptions(), &batch);
-  }
-
-  s = db->Get(ReadOptions(), "key1", &value);
-  assert(s.IsNotFound());
-
-  db->Get(ReadOptions(), "key2", &value);
-  assert(value == "value");
-
-  {
-    PinnableSlice pinnable_val;
-    db->Get(ReadOptions(), db->DefaultColumnFamily(), "key2", &pinnable_val);
-    assert(pinnable_val == "value");
-  }
-
-  {
-    std::string string_val;
-    // If it cannot pin the value, it copies the value to its internal buffer.
-    // The intenral buffer could be set during construction.
-    PinnableSlice pinnable_val(&string_val);
-    db->Get(ReadOptions(), db->DefaultColumnFamily(), "key2", &pinnable_val);
-    assert(pinnable_val == "value");
-    // If the value is not pinned, the internal buffer must have the value.
-    assert(pinnable_val.IsPinned() || string_val == "value");
-  }
-
-  PinnableSlice pinnable_val;
-  s = db->Get(ReadOptions(), db->DefaultColumnFamily(), "key1", &pinnable_val);
-  assert(s.IsNotFound());
-  // Reset PinnableSlice after each use and before each reuse
-  pinnable_val.Reset();
-  db->Get(ReadOptions(), db->DefaultColumnFamily(), "key2", &pinnable_val);
-  assert(pinnable_val == "value");
-  pinnable_val.Reset();
+// //   assert(s2.ok());
+//   for(size_t i = 0;i<100;i++){
+//     std::string c = "key1"+std::to_string(i);
+//     s = db->Put(WriteOptions(), c, "value");
+//     if(i%100 == 0){
+//         db->Flush(FlushOptions());
+//     }
+//   }
+//   // Put key-value
+//   assert(s.ok());
+//   std::string value;
+//   // get value
+//   s = db->Get(ReadOptions(), "key1", &value);
+//   assert(s.ok());
+//   assert(value == "value");
+  DB* sdb;
+   s = DB::OpenAsSecondary(options, kDBPath, "/tmp/secondary",&sdb);
+  std::cout<<s.ToString();
+  
+//   db->Flush(FlushOptions());
+//   db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
   // The Slice pointed by pinnable_val is not valid after this point
-
-  delete db;
-
+//   db->Delete(WriteOptions(), "dummy");
+  std::string value;
+  s = sdb->Get(ReadOptions(), "key1", &value);
+  std::cout<<s.ToString();
+//   delete db;
+    
   return 0;
 }

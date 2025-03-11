@@ -7,6 +7,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <cstddef>
+#include "rocksdb/file_system.h"
+#include "rocksdb/options.h"
+#include "rocksdb/types.h"
+#include "rocksdb/utilities/options_util.h"
 #ifndef ROCKSDB_LITE
 
 #include "utilities/checkpoint/checkpoint_impl.h"
@@ -29,6 +34,7 @@
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/file_checksum_helper.h"
+#include "rocksdb/convenience.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -111,6 +117,7 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
   // create snapshot directory
   s = db_->GetEnv()->CreateDir(full_private_path);
   uint64_t sequence_number = 0;
+  std::string manifestFileName;
   if (s.ok()) {
     // enable file deletions
     s = db_->DisableFileDeletions();
@@ -128,16 +135,22 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
                                                   IOOptions(), nullptr);
           } /* link_file_cb */,
           [&](const std::string& src_dirname, const std::string& fname,
-              uint64_t size_limit_bytes, FileType,
+              uint64_t size_limit_bytes, FileType type,
               const std::string& /* checksum_func_name */,
               const std::string& /* checksum_val */) {
             ROCKS_LOG_INFO(db_options.info_log, "Copying %s", fname.c_str());
+            if(type == kDescriptorFile) {
+                manifestFileName = full_private_path + fname;
+            }
             return CopyFile(db_->GetFileSystem(), src_dirname + fname,
                             full_private_path + fname, size_limit_bytes,
                             db_options.use_fsync);
           } /* copy_file_cb */,
-          [&](const std::string& fname, const std::string& contents, FileType) {
+          [&](const std::string& fname, const std::string& contents, FileType type) {
             ROCKS_LOG_INFO(db_options.info_log, "Creating %s", fname.c_str());
+            if(type == kDescriptorFile) {
+                manifestFileName = full_private_path + fname;
+            }
             return CreateFile(db_->GetFileSystem(), full_private_path + fname,
                               contents, db_options.use_fsync);
           } /* create_file_cb */,
@@ -178,6 +191,58 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
                    s.ToString().c_str());
     CleanStagingDirectory(full_private_path, db_options.info_log.get());
   }
+
+  Status check_status;
+  DBOptions db_opt;
+  std::vector<ColumnFamilyDescriptor> loaded_cf_descs;
+  DBOptions loaded_db_opt;
+  ConfigOptions config_options;
+      // clean all the files we might have created
+    ROCKS_LOG_INFO(db_options.info_log, "Load checkpoint options%s", checkpoint_dir.c_str());
+  check_status = LoadLatestOptions(config_options, checkpoint_dir, &loaded_db_opt,
+                        &loaded_cf_descs);
+  if(!check_status.ok()) {
+    return s;
+  }
+      ROCKS_LOG_INFO(db_options.info_log, "Load checkpoint options status %s", check_status.ToString().c_str());
+
+  loaded_db_opt.avoid_flush_during_recovery = true;
+  loaded_db_opt.wal_dir = "";
+  for(auto& cf_desc: loaded_cf_descs) {
+        cf_desc.options.disable_auto_compactions = true;
+  }
+  
+  std::vector<ColumnFamilyHandle*> handles;
+  DB* checkpoint_db;
+
+  check_status = DB::Open(loaded_db_opt, checkpoint_dir, loaded_cf_descs, &handles, &checkpoint_db);
+  ROCKS_LOG_INFO(db_options.info_log, "Open checkpoint options status %s", check_status.ToString().c_str());
+  if(!check_status.ok()) {
+    return s;
+  }
+
+  check_status = checkpoint_db->Delete(WriteOptions(), "dummy");
+  if(!check_status.ok()){
+    s = check_status;
+  }
+
+  for(ColumnFamilyHandle* handle : handles){
+    delete handle;
+  }
+  std::string lockFile = LockFileName(checkpoint_dir);
+
+  db_->GetEnv()->DeleteFile(lockFile);
+  db_->GetEnv()->DeleteFile(checkpoint_dir+"/LOG");
+  db_->GetEnv()->DeleteFile(checkpoint_dir+"/IDENTITY");
+
+  ROCKS_LOG_INFO(db_options.info_log, "Ckise checkpoint options status %s", check_status.ToString().c_str());
+    ImmutableDBOptions immutable_options(db_->GetDBOptions());
+    VersionSet sss(checkpoint_dir, &immutable_options, FileOptions(), nullptr, nullptr, nullptr,nullptr, nullptr);
+    // std::string manifest = checkpoint_dir+
+    
+    // sss.TryRecoverFromOneManifest(, const std::vector<ColumnFamilyDescriptor> &column_families, bool read_only, std::string *db_id, bool *has_missing_table_file)
+
+
   return s;
 }
 
