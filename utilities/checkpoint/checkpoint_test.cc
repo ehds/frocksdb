@@ -261,7 +261,14 @@ class CheckpointTest : public testing::Test {
   }
 };
 
-TEST_F(CheckpointTest, GetSnapshotLink) {
+class CheckpointBasiTestWithParams : public CheckpointTest,
+                                     public testing::WithParamInterface<bool> {
+ public:
+  bool GetCompactManifestFile() { return GetParam(); }
+};
+
+
+TEST_P(CheckpointBasiTestWithParams, GetSnapshotLink) {
   for (uint64_t log_size_for_flush : {0, 1000000}) {
     Options options;
     DB* snapshotDB;
@@ -314,7 +321,7 @@ TEST_F(CheckpointTest, GetSnapshotLink) {
   }
 }
 
-TEST_F(CheckpointTest, CheckpointWithBlob) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointWithBlob) {
   // Create a database with a blob file
   Options options = CurrentOptions();
   options.create_if_missing = true;
@@ -368,7 +375,7 @@ TEST_F(CheckpointTest, CheckpointWithBlob) {
   ASSERT_EQ(value, blob);
 }
 
-TEST_F(CheckpointTest, ExportColumnFamilyWithLinks) {
+TEST_P(CheckpointBasiTestWithParams, ExportColumnFamilyWithLinks) {
   // Create a database
   auto options = CurrentOptions();
   options.create_if_missing = true;
@@ -435,7 +442,7 @@ TEST_F(CheckpointTest, ExportColumnFamilyWithLinks) {
   }
 }
 
-TEST_F(CheckpointTest, ExportColumnFamilyNegativeTest) {
+TEST_P(CheckpointBasiTestWithParams, ExportColumnFamilyNegativeTest) {
   // Create a database
   auto options = CurrentOptions();
   options.create_if_missing = true;
@@ -462,12 +469,12 @@ TEST_F(CheckpointTest, ExportColumnFamilyNegativeTest) {
   delete checkpoint;
 }
 
-TEST_F(CheckpointTest, CheckpointCF) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointCF) {
   Options options = CurrentOptions();
   CreateAndReopenWithCF({"one", "two", "three", "four", "five"}, options);
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
-      {{"CheckpointTest::CheckpointCF:2", "DBImpl::GetLiveFiles:2"},
-       {"DBImpl::GetLiveFiles:1", "CheckpointTest::CheckpointCF:1"}});
+      {{"CheckpointBasiTestWithParams::CheckpointCF:2", "DBImpl::GetLiveFiles:2"},
+       {"DBImpl::GetLiveFiles:1", "CheckpointBasiTestWithParams::CheckpointCF:1"}});
 
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
 
@@ -490,14 +497,14 @@ TEST_F(CheckpointTest, CheckpointCF) {
     ASSERT_OK(checkpoint->CreateCheckpoint(snapshot_name_));
     delete checkpoint;
   });
-  TEST_SYNC_POINT("CheckpointTest::CheckpointCF:1");
+  TEST_SYNC_POINT("CheckpointBasiTestWithParams::CheckpointCF:1");
   ASSERT_OK(Put(0, "Default", "Default1"));
   ASSERT_OK(Put(1, "one", "eleven"));
   ASSERT_OK(Put(2, "two", "twelve"));
   ASSERT_OK(Put(3, "three", "thirteen"));
   ASSERT_OK(Put(4, "four", "fourteen"));
   ASSERT_OK(Put(5, "five", "fifteen"));
-  TEST_SYNC_POINT("CheckpointTest::CheckpointCF:2");
+  TEST_SYNC_POINT("CheckpointBasiTestWithParams::CheckpointCF:2");
   t.join();
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
   ASSERT_OK(Put(1, "one", "twentyone"));
@@ -530,7 +537,7 @@ TEST_F(CheckpointTest, CheckpointCF) {
   snapshotDB = nullptr;
 }
 
-TEST_F(CheckpointTest, CheckpointCFNoFlush) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointCFNoFlush) {
   Options options = CurrentOptions();
   CreateAndReopenWithCF({"one", "two", "three", "four", "five"}, options);
 
@@ -589,7 +596,7 @@ TEST_F(CheckpointTest, CheckpointCFNoFlush) {
   snapshotDB = nullptr;
 }
 
-TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing) {
+TEST_P(CheckpointBasiTestWithParams, CurrentFileModifiedWhileCheckpointing) {
   Options options = CurrentOptions();
   options.max_manifest_file_size = 0;  // always rollover manifest for file add
   Reopen(options);
@@ -599,7 +606,7 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing) {
        // the db so the checkpoint thread won't hit the WriteManifest
        // syncpoints.
        {"CheckpointImpl::CreateCheckpoint:FlushDone",
-        "CheckpointTest::CurrentFileModifiedWhileCheckpointing:PrePut"},
+        "CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing:PrePut"},
        // Roll the manifest during checkpointing right after live files are
        // snapshotted.
        {"CheckpointImpl::CreateCheckpoint:SavedLiveFiles1",
@@ -615,7 +622,7 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing) {
     delete checkpoint;
   });
   TEST_SYNC_POINT(
-      "CheckpointTest::CurrentFileModifiedWhileCheckpointing:PrePut");
+      "CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing:PrePut");
   ASSERT_OK(Put("Default", "Default1"));
   ASSERT_OK(Flush());
   t.join();
@@ -630,7 +637,7 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing) {
   snapshotDB = nullptr;
 }
 
-TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing2PC) {
+TEST_P(CheckpointBasiTestWithParams, CurrentFileModifiedWhileCheckpointing2PC) {
   Close();
   const std::string dbname = test::PerThreadDBPath("transaction_testdb");
   ASSERT_OK(DestroyDB(dbname, CurrentOptions()));
@@ -685,8 +692,8 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing2PC) {
   }
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
       {{"CheckpointImpl::CreateCheckpoint:SavedLiveFiles1",
-        "CheckpointTest::CurrentFileModifiedWhileCheckpointing2PC:PreCommit"},
-       {"CheckpointTest::CurrentFileModifiedWhileCheckpointing2PC:PostCommit",
+        "CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing2PC:PreCommit"},
+       {"CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing2PC:PostCommit",
         "CheckpointImpl::CreateCheckpoint:SavedLiveFiles2"}});
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
   ROCKSDB_NAMESPACE::port::Thread t([&]() {
@@ -696,11 +703,11 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing2PC) {
     delete checkpoint;
   });
   TEST_SYNC_POINT(
-      "CheckpointTest::CurrentFileModifiedWhileCheckpointing2PC:PreCommit");
+      "CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing2PC:PreCommit");
   ASSERT_OK(txn->Commit());
   delete txn;
   TEST_SYNC_POINT(
-      "CheckpointTest::CurrentFileModifiedWhileCheckpointing2PC:PostCommit");
+      "CheckpointBasiTestWithParams::CurrentFileModifiedWhileCheckpointing2PC:PostCommit");
   t.join();
 
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
@@ -747,7 +754,7 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing2PC) {
   delete txdb;
 }
 
-TEST_F(CheckpointTest, CheckpointInvalidDirectoryName) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointInvalidDirectoryName) {
   for (std::string checkpoint_dir : {"", "/", "////"}) {
     Checkpoint* checkpoint;
     ASSERT_OK(Checkpoint::Create(db_, &checkpoint));
@@ -756,7 +763,7 @@ TEST_F(CheckpointTest, CheckpointInvalidDirectoryName) {
   }
 }
 
-TEST_F(CheckpointTest, CheckpointWithParallelWrites) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointWithParallelWrites) {
   // When run with TSAN, this exposes the data race fixed in
   // https://github.com/facebook/rocksdb/pull/3603
   ASSERT_OK(Put("key1", "val1"));
@@ -768,7 +775,7 @@ TEST_F(CheckpointTest, CheckpointWithParallelWrites) {
   thread.join();
 }
 
-TEST_F(CheckpointTest, CheckpointWithUnsyncedDataDropped) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointWithUnsyncedDataDropped) {
   Options options = CurrentOptions();
   std::unique_ptr<FaultInjectionTestEnv> env(new FaultInjectionTestEnv(env_));
   options.env = env.get();
@@ -794,7 +801,7 @@ TEST_F(CheckpointTest, CheckpointWithUnsyncedDataDropped) {
   db_ = nullptr;
 }
 
-TEST_F(CheckpointTest, CheckpointOptionsFileFailedToPersist) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointOptionsFileFailedToPersist) {
   // Regression test for a bug where checkpoint failed on a DB where persisting
   // OPTIONS file failed and the DB was opened with
   // `fail_if_options_file_error == false`.
@@ -838,7 +845,7 @@ TEST_F(CheckpointTest, CheckpointOptionsFileFailedToPersist) {
   db_ = nullptr;
 }
 
-TEST_F(CheckpointTest, CheckpointReadOnlyDB) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointReadOnlyDB) {
   ASSERT_OK(Put("foo", "foo_value"));
   ASSERT_OK(Flush());
   Close();
@@ -859,7 +866,7 @@ TEST_F(CheckpointTest, CheckpointReadOnlyDB) {
   delete snapshot_db;
 }
 
-TEST_F(CheckpointTest, CheckpointReadOnlyDBWithMultipleColumnFamilies) {
+TEST_P(CheckpointBasiTestWithParams, CheckpointReadOnlyDBWithMultipleColumnFamilies) {
   Options options = CurrentOptions();
   CreateAndReopenWithCF({"pikachu", "eevee"}, options);
   for (int i = 0; i != 3; ++i) {
