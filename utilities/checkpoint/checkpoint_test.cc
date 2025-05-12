@@ -908,7 +908,12 @@ TEST_P(CheckpointBasiTestWithParams, CheckpointReadOnlyDBWithMultipleColumnFamil
   delete snapshot_db;
 }
 
+INSTANTIATE_TEST_CASE_P(BasicTest,
+                        CheckpointBasiTestWithParams,
+                        ::testing::Values(true, false));
+
 }  // namespace ROCKSDB_NAMESPACE
+
 
 int main(int argc, char** argv) {
   ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
