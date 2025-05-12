@@ -228,8 +228,6 @@ Status CheckpointImpl::CompactManifestFile(const std::string& checkpoint_dir) {
                            " not exists.");
   }
 
-  ColumnFamilyData* cfd = nullptr;
-  int level = -1;
   VersionEdit edit;
   std::unique_ptr<FSDirectory> db_dir;
   InstrumentedMutex mutex;

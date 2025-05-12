@@ -6,9 +6,12 @@
 // This file implements the "bridge" between Java and C++ and enables
 // calling c++ ROCKSDB_NAMESPACE::Checkpoint methods from Java side.
 
+#include "rocksdb/utilities/checkpoint.h"
+
 #include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <string>
 
 #include "include/org_rocksdb_Checkpoint.h"
@@ -45,12 +48,13 @@ void Java_org_rocksdb_Checkpoint_disposeInternal(JNIEnv* /*env*/,
 /*
  * Class:     org_rocksdb_Checkpoint
  * Method:    createCheckpoint
- * Signature: (JLjava/lang/String;)V
+ * Signature: (JLjava/lang/String/Boolean;)V
  */
-void Java_org_rocksdb_Checkpoint_createCheckpoint(JNIEnv* env, jobject /*jobj*/,
-                                                  jlong jcheckpoint_handle,
-                                                  jstring jcheckpoint_path) {
+void Java_org_rocksdb_Checkpoint_createCheckpoint(
+    JNIEnv* env, jobject /*jobj*/, jlong jcheckpoint_handle,
+    jstring jcheckpoint_path, jboolean jcompact_manifest_file) {
   const char* checkpoint_path = env->GetStringUTFChars(jcheckpoint_path, 0);
+  const bool compact_manifest_file = static_cast<bool>(jcompact_manifest_file);
   if (checkpoint_path == nullptr) {
     // exception thrown: OutOfMemoryError
     return;
@@ -58,7 +62,8 @@ void Java_org_rocksdb_Checkpoint_createCheckpoint(JNIEnv* env, jobject /*jobj*/,
 
   auto* checkpoint =
       reinterpret_cast<ROCKSDB_NAMESPACE::Checkpoint*>(jcheckpoint_handle);
-  ROCKSDB_NAMESPACE::Status s = checkpoint->CreateCheckpoint(checkpoint_path);
+  ROCKSDB_NAMESPACE::Status s = checkpoint->CreateCheckpoint(
+      checkpoint_path, 0, nullptr, compact_manifest_file);
 
   env->ReleaseStringUTFChars(jcheckpoint_path, checkpoint_path);
 
