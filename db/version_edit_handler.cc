@@ -22,6 +22,7 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
   assert(log_read_status);
   assert(log_read_status->ok());
 
+  size_t recovered_edits = 0;
   Status s = Initialize();
   while (reader.LastRecordEnd() < max_manifest_read_size_ && s.ok() &&
          reader.ReadRecord(&record, &scratch) && log_read_status->ok()) {
@@ -43,6 +44,7 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
           if (!s.ok()) {
             break;
           }
+          ++recovered_edits;
         }
         if (!s.ok()) {
           break;
@@ -52,6 +54,7 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
     } else {
       s = ApplyVersionEdit(edit, &cfd);
       if (s.ok()) {
+        ++recovered_edits;
       }
     }
   }
@@ -64,6 +67,8 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
   if (!s.ok()) {
     status_ = s;
   }
+  TEST_SYNC_POINT_CALLBACK("VersionEditHandlerBase::Iterate:Finish",
+                           &recovered_edits);
 }
 
 Status ListColumnFamiliesHandler::ApplyVersionEdit(

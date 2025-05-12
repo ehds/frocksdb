@@ -402,6 +402,7 @@ Status Replayer::Replay() {
   WriteOptions woptions;
   ReadOptions roptions;
   Trace trace;
+  uint64_t ops = 0;
   Iterator* single_iter = nullptr;
   while (s.ok()) {
     trace.reset();
@@ -423,6 +424,7 @@ Status Replayer::Replay() {
         WriteBatch batch(w_payload.write_batch_data.ToString());
         db_->Write(woptions, &batch);
       }
+      ops++;
     } else if (trace.type == kTraceGet) {
       GetPayload get_payload;
       get_payload.cf_id = 0;
@@ -444,7 +446,7 @@ Status Replayer::Replay() {
         db_->Get(roptions, cf_map_[get_payload.cf_id], get_payload.get_key,
                  &value);
       }
-     ;
+      ops++;
     } else if (trace.type == kTraceIteratorSeek) {
       // Currently, we only support to call Seek. The Next() and Prev() is not
       // supported.
@@ -467,7 +469,7 @@ Status Replayer::Replay() {
         single_iter = db_->NewIterator(roptions, cf_map_[iter_payload.cf_id]);
       }
       single_iter->Seek(iter_payload.iter_key);
-     ;
+      ops++;
       delete single_iter;
     } else if (trace.type == kTraceIteratorSeekForPrev) {
       // Currently, we only support to call SeekForPrev. The Next() and Prev()
@@ -491,7 +493,7 @@ Status Replayer::Replay() {
         single_iter = db_->NewIterator(roptions, cf_map_[iter_payload.cf_id]);
       }
       single_iter->SeekForPrev(iter_payload.iter_key);
-     ;
+      ops++;
       delete single_iter;
     } else if (trace.type == kTraceEnd) {
       // Do nothing for now.
@@ -539,6 +541,7 @@ Status Replayer::MultiThreadReplay(uint32_t threads_num) {
       std::chrono::system_clock::now();
   WriteOptions woptions;
   ReadOptions roptions;
+  uint64_t ops = 0;
   while (s.ok()) {
     std::unique_ptr<ReplayerWorkerArg> ra(new ReplayerWorkerArg);
     ra->db = db_;
@@ -557,19 +560,19 @@ Status Replayer::MultiThreadReplay(uint32_t threads_num) {
     if (ra->trace_entry.type == kTraceWrite) {
       thread_pool.Schedule(&Replayer::BGWorkWriteBatch, ra.release(), nullptr,
                            nullptr);
-     ;
+      ops++;
     } else if (ra->trace_entry.type == kTraceGet) {
       thread_pool.Schedule(&Replayer::BGWorkGet, ra.release(), nullptr,
                            nullptr);
-     ;
+      ops++;
     } else if (ra->trace_entry.type == kTraceIteratorSeek) {
       thread_pool.Schedule(&Replayer::BGWorkIterSeek, ra.release(), nullptr,
                            nullptr);
-     ;
+      ops++;
     } else if (ra->trace_entry.type == kTraceIteratorSeekForPrev) {
       thread_pool.Schedule(&Replayer::BGWorkIterSeekForPrev, ra.release(),
                            nullptr, nullptr);
-     ;
+      ops++;
     } else if (ra->trace_entry.type == kTraceEnd) {
       // Do nothing for now.
       // TODO: Add some validations later.

@@ -494,7 +494,7 @@ Status DBImpl::Recover(
     return s;
   }
   s = SetDBId(read_only);
-  if (s.ok()) {
+  if (s.ok() && !read_only) {
     s = DeleteUnreferencedSstFiles();
   }
 
