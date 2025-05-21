@@ -20,7 +20,8 @@ class CheckpointImpl : public Checkpoint {
 
   Status CreateCheckpoint(const std::string& checkpoint_dir,
                           uint64_t log_size_for_flush,
-                          uint64_t* sequence_number_ptr) override;
+                          uint64_t* sequence_number_ptr,
+                          bool compact_manifest_file) override;
 
   Status ExportColumnFamily(ColumnFamilyHandle* handle,
                             const std::string& export_dir,
@@ -46,7 +47,7 @@ class CheckpointImpl : public Checkpoint {
 
  private:
   void CleanStagingDirectory(const std::string& path, Logger* info_log);
-
+  Status CompactManifestFile(const std::string& checkpoint_dir);
   // Export logic customization by providing callbacks for link or copy.
   Status ExportFilesInMetaData(
       const DBOptions& db_options, const ColumnFamilyMetaData& metadata,

@@ -42,7 +42,8 @@ class Checkpoint {
   // nullptr.
   virtual Status CreateCheckpoint(const std::string& checkpoint_dir,
                                   uint64_t log_size_for_flush = 0,
-                                  uint64_t* sequence_number_ptr = nullptr);
+                                  uint64_t* sequence_number_ptr = nullptr,
+                                  bool compact_manifest_file = false);
 
   // Exports all live SST files of a specified Column Family onto export_dir,
   // returning SST files information in metadata.

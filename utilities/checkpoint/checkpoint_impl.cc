@@ -7,9 +7,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef ROCKSDB_LITE
+#include <cstddef>
 
-#include "utilities/checkpoint/checkpoint_impl.h"
+#include "options/cf_options.h"
+#include "rocksdb/file_system.h"
+#include "rocksdb/options.h"
+#include "rocksdb/status.h"
+#include "rocksdb/types.h"
+#include "rocksdb/utilities/options_util.h"
+#ifndef ROCKSDB_LITE
 
 #include <algorithm>
 #include <cinttypes>
@@ -21,6 +27,7 @@
 #include "file/file_util.h"
 #include "file/filename.h"
 #include "port/port.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/metadata.h"
@@ -29,6 +36,7 @@
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/file_checksum_helper.h"
+#include "utilities/checkpoint/checkpoint_impl.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -39,19 +47,20 @@ Status Checkpoint::Create(DB* db, Checkpoint** checkpoint_ptr) {
 
 Status Checkpoint::CreateCheckpoint(const std::string& /*checkpoint_dir*/,
                                     uint64_t /*log_size_for_flush*/,
-                                    uint64_t* /*sequence_number_ptr*/) {
+                                    uint64_t* /*sequence_number_ptr*/,
+                                    bool /*compact_manifest_file*/) {
   return Status::NotSupported("");
 }
 
-void CheckpointImpl::CleanStagingDirectory(
-    const std::string& full_private_path, Logger* info_log) {
-    std::vector<std::string> subchildren;
+void CheckpointImpl::CleanStagingDirectory(const std::string& full_private_path,
+                                           Logger* info_log) {
+  std::vector<std::string> subchildren;
   Status s = db_->GetEnv()->FileExists(full_private_path);
   if (s.IsNotFound()) {
     return;
   }
-  ROCKS_LOG_INFO(info_log, "File exists %s -- %s",
-                 full_private_path.c_str(), s.ToString().c_str());
+  ROCKS_LOG_INFO(info_log, "File exists %s -- %s", full_private_path.c_str(),
+                 s.ToString().c_str());
   s = db_->GetEnv()->GetChildren(full_private_path, &subchildren);
   if (s.ok()) {
     for (auto& subchild : subchildren) {
@@ -63,8 +72,8 @@ void CheckpointImpl::CleanStagingDirectory(
   }
   // finally delete the private dir
   s = db_->GetEnv()->DeleteDir(full_private_path);
-  ROCKS_LOG_INFO(info_log, "Delete dir %s -- %s",
-                 full_private_path.c_str(), s.ToString().c_str());
+  ROCKS_LOG_INFO(info_log, "Delete dir %s -- %s", full_private_path.c_str(),
+                 s.ToString().c_str());
 }
 
 Status Checkpoint::ExportColumnFamily(
@@ -76,7 +85,8 @@ Status Checkpoint::ExportColumnFamily(
 // Builds an openable snapshot of RocksDB
 Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
                                         uint64_t log_size_for_flush,
-                                        uint64_t* sequence_number_ptr) {
+                                        uint64_t* sequence_number_ptr,
+                                        bool compact_manifest_file) {
   DBOptions db_options = db_->GetDBOptions();
 
   Status s = db_->GetEnv()->FileExists(checkpoint_dir);
@@ -103,14 +113,11 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
 
   std::string full_private_path =
       checkpoint_dir.substr(0, final_nonslash_idx + 1) + ".tmp";
-  ROCKS_LOG_INFO(
-      db_options.info_log,
-      "Snapshot process -- using temporary directory %s",
-      full_private_path.c_str());
   CleanStagingDirectory(full_private_path, db_options.info_log.get());
   // create snapshot directory
   s = db_->GetEnv()->CreateDir(full_private_path);
   uint64_t sequence_number = 0;
+  std::string manifestFileName;
   if (s.ok()) {
     // enable file deletions
     s = db_->DisableFileDeletions();
@@ -128,16 +135,23 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
                                                   IOOptions(), nullptr);
           } /* link_file_cb */,
           [&](const std::string& src_dirname, const std::string& fname,
-              uint64_t size_limit_bytes, FileType,
+              uint64_t size_limit_bytes, FileType type,
               const std::string& /* checksum_func_name */,
               const std::string& /* checksum_val */) {
             ROCKS_LOG_INFO(db_options.info_log, "Copying %s", fname.c_str());
+            if (type == kDescriptorFile) {
+              manifestFileName = full_private_path + fname;
+            }
             return CopyFile(db_->GetFileSystem(), src_dirname + fname,
                             full_private_path + fname, size_limit_bytes,
                             db_options.use_fsync);
           } /* copy_file_cb */,
-          [&](const std::string& fname, const std::string& contents, FileType) {
+          [&](const std::string& fname, const std::string& contents,
+              FileType type) {
             ROCKS_LOG_INFO(db_options.info_log, "Creating %s", fname.c_str());
+            if (type == kDescriptorFile) {
+              manifestFileName = full_private_path + fname;
+            }
             return CreateFile(db_->GetFileSystem(), full_private_path + fname,
                               contents, db_options.use_fsync);
           } /* create_file_cb */,
@@ -177,6 +191,62 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
     ROCKS_LOG_INFO(db_options.info_log, "Snapshot failed -- %s",
                    s.ToString().c_str());
     CleanStagingDirectory(full_private_path, db_options.info_log.get());
+  }
+  if (compact_manifest_file) {
+    s = CompactManifestFile(checkpoint_dir);
+  }
+  return s;
+}
+
+Status CheckpointImpl::CompactManifestFile(const std::string& checkpoint_dir) {
+  DBOptions db_opt;
+  Status s;
+  std::vector<ColumnFamilyDescriptor> column_families;
+  ColumnFamilyOptions cf_options{};
+
+  if (column_families.empty()) {
+    column_families.emplace_back(kDefaultColumnFamilyName, cf_options);
+  }
+  db_opt.db_paths.emplace_back(checkpoint_dir, 0);
+  ImmutableDBOptions immutable_options(db_opt);
+
+  std::shared_ptr<Cache> tc =
+      NewLRUCache(1 << 20 /* capacity */, db_opt.table_cache_numshardbits);
+
+  VersionSet version(checkpoint_dir, &immutable_options, FileOptions(),
+                     tc.get(), nullptr, nullptr, nullptr, nullptr);
+
+  s = version.Recover(column_families);
+  if (!s.ok()) {
+    return s;
+  }
+
+  std::string old_descriptor_fname =
+      DescriptorFileName(checkpoint_dir, version.manifest_file_number());
+  if (db_->GetEnv()->FileExists(old_descriptor_fname).IsNotFound()) {
+    return Status::Aborted("Descriptor file " + old_descriptor_fname +
+                           " not exists.");
+  }
+
+  VersionEdit edit;
+  std::unique_ptr<FSDirectory> db_dir;
+  InstrumentedMutex mutex;
+  mutex.Lock();
+  MutableCFOptions mutable_cf_options(cf_options);
+  s = version.LogAndApply(version.GetColumnFamilySet()->GetDefault(),
+                          mutable_cf_options, &edit, &mutex);
+  mutex.Unlock();
+  if (!s.ok()) {
+    return s;
+  }
+
+  std::string new_descriptor_fname =
+      DescriptorFileName(checkpoint_dir, version.manifest_file_number());
+  assert(old_descriptor_fname != new_descriptor_fname);
+
+  if (!db_->GetEnv()->DeleteFile(old_descriptor_fname).ok()) {
+    return Status::Aborted("Could not to remove old descriptor file " +
+                           old_descriptor_fname);
   }
   return s;
 }
@@ -379,8 +449,7 @@ Status CheckpointImpl::CreateCustomCheckpoint(
   // that has changes after the last flush.
   for (size_t i = 0; s.ok() && i < wal_size; ++i) {
     if ((live_wal_files[i]->Type() == kAliveLogFile) &&
-        (!flush_memtable ||
-         live_wal_files[i]->LogNumber() >= min_log_num)) {
+        (!flush_memtable || live_wal_files[i]->LogNumber() >= min_log_num)) {
       if (i + 1 == wal_size) {
         s = copy_file_cb(db_options.wal_dir, live_wal_files[i]->PathName(),
                          live_wal_files[i]->SizeFileBytes(), kWalFile,
